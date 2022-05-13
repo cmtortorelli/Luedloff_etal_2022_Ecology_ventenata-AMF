@@ -1,0 +1,192 @@
+---
+title: "ventenata_AMF_analysis"
+author: "Claire Tortorelli"
+date: "1/26/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(DHARMa)
+library(emmeans)
+library(ggpubr)
+```
+
+Read in ventenata data with number of hits for each endophyte category: AM arbuscules; AM vesicles; AM hypha; and dark septate endophyte (DS); and hits with no endophyte (zero)
+
+```{r}
+df <- read.csv(here("data/veduAMFdf_all.csv"))
+
+```
+
+
+
+```{r}
+#convert vegtype to a ordered factor
+df$vegtype <- factor(df$vegtype, levels = c("ARRI", "ARAR", "SEEP"))
+df$plotID <- factor(df$plotID)
+#create all AMF column
+df$AMF <- df$AMHypha + df$AMVesicle
+
+#crate column for block
+df$blockID <- substr(df$plotID, 5,6)
+
+#creat proportion columns for endophyte categories
+df$propAMF <- df$AMF / df$totalHits
+df$propDS <- df$DS / df$totalHits
+
+#summarize data
+df %>% group_by(vegtype) %>% 
+    summarise(meanAMF = mean(propAMF*100), sdAMF = sd(propAMF*100),
+                meanDS = mean(propDS*100), sdDS = sd(propDS*100),
+meanV = mean(AMVesicle))
+
+summary(df)
+```
+
+## Data exploration
+
+```{r}
+#create hisogram of data
+
+hist(df$propAMF, breaks = 16)
+hist(df$AMHypha / df$totalHits, breaks = 16)
+hist(df$AMVesicle / df$totalHits, breaks = 16)
+hist(df$propDS, breaks = 16)
+
+#plot relationships between endophytes and root length
+plot(df$propAMF ~ df$rootL)
+plot(df$propDS ~ df$rootL)
+
+#plot relationships between endophytes and veg type
+boxplot(df$propAMF ~ df$vegtype)
+boxplot(df$propDS ~ df$vegtype)
+
+#plot relationship between endophytes and distance to shrubs
+df$shrubDist2 <- df$shrubDist
+#replace >500 with 500 for modeling
+df$shrubDist2 <- replace(df$shrubDist2, df$shrubDist2 == ">500", 500)
+df$shrubDist2 <- as.numeric(df$shrubDist2)
+summary(df$shrubDist2)
+
+plot(df$propAMF ~ df$shrubDist2)
+plot(df$propDS ~ df$shrubDist2)
+
+#plot endophyte relationship to ventenata biomass (2019) i.e. invaded status and resident biomass (e.g. site productivity)
+plot(df$propAMF ~ df$vedu19_g)
+plot(df$propDS ~ df$vedu19_g)
+
+plot(df$propAMF ~ df$resident20_g)
+plot(df$propDS ~ df$resident20_g)
+```
+
+## Model relationships between endophytes and vegetation type:
+
+SEEP = ephemeral wet meadows/ seeps
+ARAR = low sage steppe, Artemisia arbuscula
+ARRI = scab-flats, Artemisia rigida
+
+```{r}
+anova1 <- aov(propAMF ~ vegtype, data = df)
+summary(anova1)
+
+library(emmeans)
+
+anova2 <- aov(propAMF ~ vegtype + rootL, data = df)
+summary(anova2)
+```
+
+using binomial distribution to model counted proportions
+```{r}
+#model AMF 
+#random intercept term for intercept varying among plots and among plots withing blocks
+library(glmmTMB)
+
+library(nlme)
+
+
+fit1 <- glmmTMB(propAMF ~ vegtype + (1|entryID) + (1|blockID/plotID), 
+    data = df,
+    family = binomial,
+    weights = totalHits)
+
+summary(fit1) #summarize model
+simulateResiduals(fit1, plot = T) #simulate and plot residuals
+
+#emmeans
+emmeans(fit1, pairwise ~ vegtype, type = "response")
+
+#DS model
+fit2 <- glmmTMB(propDS ~ vegtype + (1|entryID) + (1|blockID/plotID), 
+    data = df,
+    family = binomial,
+    weights = totalHits)
+
+summary(fit2) #summarize model
+simulateResiduals(fit2, plot = T) #simulate and plot residuals
+```
+
+```{r}
+# ANOVA
+library(car)
+car::Anova(fit1)
+Anova(fit2)
+
+emmeans(fit1, propAMF ~ vegtype)
+```
+
+
+```{r}
+#AMF ~ rootL model
+fit3 <- glmmTMB(propAMF ~ rootL + (1|entryID) + (1|blockID/plotID), 
+    data = df,
+    family = binomial,
+    weights = totalHits)
+
+summary(fit3) #summarize model
+simulateResiduals(fit3, plot = T)
+
+#AMF ~ DS
+fit4 <- glmmTMB(propAMF ~ propDS + (1|entryID) + (1|blockID/plotID), #problematic because as a proportion one has to go up as the other goes down? except for the zeros?
+    data = df,
+    family = binomial,
+    weights = totalHits)
+
+summary(fit4) #summarize model
+simulateResiduals(fit4, plot = T)
+
+
+```
+
+Make some pretty boxplots
+```{r}
+(pamf <- ggplot(data = df, aes(x = vegtype, y = propAMF * 100)) +
+    geom_boxplot()+
+     theme_bw(base_size = 13)+
+     theme(panel.grid.major = element_blank(),
+panel.grid.minor = element_blank()) +
+    ylab("AMF (% of root colonized)")+ 
+    scale_x_discrete(name = "", labels = c("ARRI" = "scab-flat", "ARAR" = "low sage-steppe", "SEEP" = "wet meadow"))
+)
+
+(pds <- ggplot(data = df, aes(x = vegtype, y = propDS * 100)) +
+    geom_boxplot()+
+     theme_bw(base_size = 13)+
+     theme(panel.grid.major = element_blank(),
+panel.grid.minor = element_blank()) +
+    ylab("DSE (% of root colonized)")+ 
+    scale_x_discrete(name = "", labels = c("ARRI" = "scab-flat", "ARAR" = "low sage-steppe", "SEEP" = "wet meadow"))
+)
+```
+
+```{r fig.height=5, fig.width=4}
+
+ggarrange(pamf, pds, 
+          #labels = c("(a)", "(b)"),  hjust = 0.015,
+          ncol = 1, nrow = 2)
+
+ggsave("AMF_DSEboxplots.png")
+```
+
